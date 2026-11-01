@@ -1,0 +1,337 @@
+"""
+.2
+Data Preprocessing and Train-Test Split Module for Intelligent Credit Risk Assessment Using Explainable AI.
+
+Responsibilities:
+1. Load processed data from data/processed/german_credit_data.csv.
+2. Separate target 'credit_risk' (0 = Good/Non-Risky, 1 = Bad/Risky) from the 20 input features.
+3. Perform a reproducible 80:20 stratified train-test split (random_state=42).
+4. Guard against data leakage: build scikit-learn ColumnTransformer and fit strictly on training data.
+   - Numerical: StandardScaler (ensures compatibility with linear models while remaining compatible with tree models)
+   - Categorical: OneHotEncoder(handle_unknown='ignore', sparse_output=False)
+5. Save raw feature splits, transformed feature matrices, and target vectors to data/splits/.
+6. Serialize the fitted preprocessor to models/preprocessor.joblib.
+7. Execute automated validation checks:
+   - Row counts and stratified target distributions.
+   - Zero index overlap between train and test sets.
+   - Zero missing target values.
+   - Complete absence of target leakage.
+   - Resiliency to unseen categorical values via handle_unknown='ignore'.
+"""
+
+import sys
+from pathlib import Path
+from typing import Dict, List, Tuple, Any
+
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.compose import ColumnTransformer
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+
+# Project Directories & File Paths
+BASE_DIR = Path(__file__).resolve().parent.parent
+INPUT_DATA_FILE = BASE_DIR / "data" / "processed" / "german_credit_data.csv"
+SPLITS_DIR = BASE_DIR / "data" / "splits"
+MODELS_DIR = BASE_DIR / "models"
+PREPROCESSOR_FILE = MODELS_DIR / "preprocessor.joblib"
+
+TARGET_COL = "credit_risk"
+
+NUMERICAL_COLUMNS: List[str] = [
+    "duration",
+    "credit_amount",
+    "installment_rate",
+    "residence_since",
+    "age",
+    "existing_credits",
+    "num_dependents"
+]
+
+CATEGORICAL_COLUMNS: List[str] = [
+    "checking_status",
+    "credit_history",
+    "purpose",
+    "savings_status",
+    "employment",
+    "personal_status",
+    "other_parties",
+    "property_magnitude",
+    "other_payment_plans",
+    "housing",
+    "job",
+    "telephone",
+    "foreign_worker"
+]
+
+
+def load_features_and_target(
+    file_path: Path = INPUT_DATA_FILE
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Loads dataset and separates input features (X) from target series (y).
+    Guarantees target column is never included in X.
+    """
+    if not file_path.exists():
+        raise FileNotFoundError(f"Input dataset not found at {file_path}")
+
+    df = pd.read_csv(file_path)
+
+    if TARGET_COL not in df.columns:
+        raise KeyError(f"Target column '{TARGET_COL}' not present in dataset.")
+
+    y = df[TARGET_COL].copy()
+    X = df.drop(columns=[TARGET_COL]).copy()
+
+    # Integrity verification
+    assert TARGET_COL not in X.columns, "Target leakage: target column remains in feature set X"
+    assert len(X.columns) == 20, f"Expected 20 feature columns, found {len(X.columns)}"
+    assert len(X) == len(y) == 1000, f"Expected 1,000 rows, found {len(df)}"
+
+    return X, y
+
+
+def perform_stratified_split(
+    X: pd.DataFrame,
+    y: pd.Series,
+    test_size: float = 0.2,
+    random_state: int = 42
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
+    """
+    Performs an 80:20 stratified split to preserve class imbalance proportions.
+    """
+    X_train, X_test, y_train, y_test = train_test_split(
+        X,
+        y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=y
+    )
+    return X_train, X_test, y_train, y_test
+
+
+def build_preprocessor() -> ColumnTransformer:
+    """
+    Builds a scikit-learn ColumnTransformer:
+    - StandardScaler for continuous numerical features.
+    - OneHotEncoder(handle_unknown='ignore', sparse_output=False) for categorical features.
+    """
+    numerical_transformer = StandardScaler()
+    categorical_transformer = OneHotEncoder(
+        handle_unknown="ignore",
+        sparse_output=False
+    )
+
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", numerical_transformer, NUMERICAL_COLUMNS),
+            ("cat", categorical_transformer, CATEGORICAL_COLUMNS)
+        ],
+        remainder="drop"
+    )
+    return preprocessor
+
+
+def fit_and_transform(
+    preprocessor: ColumnTransformer,
+    X_train: pd.DataFrame,
+    X_test: pd.DataFrame
+) -> Tuple[pd.DataFrame, pd.DataFrame, ColumnTransformer, List[str]]:
+    """
+    Fits preprocessor strictly on X_train to prevent data leakage, then transforms
+    both X_train and X_test into labeled DataFrames.
+    """
+    # Fit ONLY on training data
+    X_train_arr = preprocessor.fit_transform(X_train)
+    # Transform test data using training statistics
+    X_test_arr = preprocessor.transform(X_test)
+
+    # Extract human-readable feature names generated by encoders
+    feature_names = list(preprocessor.get_feature_names_out())
+
+    # Clean prefix for cleaner downstream SHAP / LIME readability
+    clean_feature_names = [
+        col.replace("num__", "").replace("cat__", "") for col in feature_names
+    ]
+
+    X_train_transformed = pd.DataFrame(
+        X_train_arr,
+        columns=clean_feature_names,
+        index=X_train.index
+    )
+    X_test_transformed = pd.DataFrame(
+        X_test_arr,
+        columns=clean_feature_names,
+        index=X_test.index
+    )
+
+    return X_train_transformed, X_test_transformed, preprocessor, clean_feature_names
+
+
+def validate_splits_and_transformations(
+    X_train_raw: pd.DataFrame,
+    X_test_raw: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series,
+    X_train_trans: pd.DataFrame,
+    X_test_trans: pd.DataFrame,
+    preprocessor: ColumnTransformer,
+    feature_names: List[str]
+) -> Dict[str, Any]:
+    """
+    Comprehensive verification suite:
+    1. Sample counts & class proportions
+    2. Zero row index overlap
+    3. Missing values in target
+    4. Target absence in features
+    5. No NaN / Inf in transformed features
+    6. Stress test on unseen categorical values
+    """
+    # 1. Sample counts
+    assert len(X_train_raw) == 800, f"Expected 800 train rows, got {len(X_train_raw)}"
+    assert len(X_test_raw) == 200, f"Expected 200 test rows, got {len(X_test_raw)}"
+
+    # 2. Stratification proportions
+    train_counts = y_train.value_counts().to_dict()
+    test_counts = y_test.value_counts().to_dict()
+
+    assert train_counts == {0: 560, 1: 240}, f"Train target distribution mismatch: {train_counts}"
+    assert test_counts == {0: 140, 1: 60}, f"Test target distribution mismatch: {test_counts}"
+
+    # 3. No index overlap (data leakage check)
+    overlap = set(X_train_raw.index).intersection(set(X_test_raw.index))
+    assert len(overlap) == 0, f"Data leakage detected! {len(overlap)} overlapping indices."
+
+    # 4. Target validity
+    assert y_train.isnull().sum() == 0, "Null values found in y_train"
+    assert y_test.isnull().sum() == 0, "Null values found in y_test"
+
+    # 5. Target column not in features
+    assert TARGET_COL not in X_train_raw.columns, "Target column in X_train_raw"
+    assert TARGET_COL not in X_test_raw.columns, "Target column in X_test_raw"
+    assert TARGET_COL not in feature_names, "Target column present in transformed feature names"
+
+    # 6. Transformed matrix finite checks
+    assert not X_train_trans.isnull().values.any(), "Transformed X_train contains NaNs"
+    assert not X_test_trans.isnull().values.any(), "Transformed X_test contains NaNs"
+    assert np.all(np.isfinite(X_train_trans.values)), "Transformed X_train contains non-finite values"
+    assert np.all(np.isfinite(X_test_trans.values)), "Transformed X_test contains non-finite values"
+
+    # 7. Stress test: Unseen categorical value handling
+    dummy_applicant = X_test_raw.iloc[[0]].copy()
+    dummy_applicant["checking_status"] = "A999_TOTALLY_NEW"
+    dummy_applicant["purpose"] = "A999_NEW_PURPOSE"
+
+    try:
+        dummy_trans = preprocessor.transform(dummy_applicant)
+        assert dummy_trans.shape[1] == len(feature_names), "Transformed shape mismatch on unseen categories"
+        assert not np.isnan(dummy_trans).any(), "NaN values generated on unseen categories"
+    except Exception as e:
+        raise AssertionError(f"Unseen category handling failed: {e}") from e
+
+    metrics = {
+        "train_samples": len(X_train_raw),
+        "test_samples": len(X_test_raw),
+        "train_target_dist": train_counts,
+        "test_target_dist": test_counts,
+        "raw_features_count": X_train_raw.shape[1],
+        "transformed_features_count": X_train_trans.shape[1],
+        "index_overlap_count": len(overlap),
+        "unseen_category_handling": "PASSED (Encoded as zeros without crashing)"
+    }
+    return metrics
+
+
+def save_artifacts(
+    X_train_raw: pd.DataFrame,
+    X_test_raw: pd.DataFrame,
+    y_train: pd.Series,
+    y_test: pd.Series,
+    X_train_trans: pd.DataFrame,
+    X_test_trans: pd.DataFrame,
+    preprocessor: ColumnTransformer,
+    splits_dir: Path = SPLITS_DIR,
+    models_dir: Path = MODELS_DIR
+) -> Dict[str, Path]:
+    """
+    Saves split datasets and fitted preprocessor artifact.
+    """
+    splits_dir.mkdir(parents=True, exist_ok=True)
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_files = {
+        "X_train_raw": splits_dir / "X_train_raw.csv",
+        "X_test_raw": splits_dir / "X_test_raw.csv",
+        "y_train": splits_dir / "y_train.csv",
+        "y_test": splits_dir / "y_test.csv",
+        "X_train_transformed": splits_dir / "X_train_transformed.csv",
+        "X_test_transformed": splits_dir / "X_test_transformed.csv",
+        "preprocessor": models_dir / "preprocessor.joblib"
+    }
+
+    # Save CSVs
+    X_train_raw.to_csv(saved_files["X_train_raw"], index=True)
+    X_test_raw.to_csv(saved_files["X_test_raw"], index=True)
+    y_train.to_frame(name=TARGET_COL).to_csv(saved_files["y_train"], index=True)
+    y_test.to_frame(name=TARGET_COL).to_csv(saved_files["y_test"], index=True)
+    X_train_trans.to_csv(saved_files["X_train_transformed"], index=True)
+    X_test_trans.to_csv(saved_files["X_test_transformed"], index=True)
+
+    # Save preprocessor artifact
+    joblib.dump(preprocessor, saved_files["preprocessor"])
+
+    return saved_files
+
+
+def run_preprocessing_pipeline() -> Tuple[Dict[str, Any], Dict[str, Path]]:
+    """
+    Orchestrates the entire data preprocessing and split workflow.
+    """
+    print("[1/5] Loading features and target...")
+    X, y = load_features_and_target()
+
+    print("[2/5] Creating 80:20 stratified train-test split (random_state=42)...")
+    X_train_raw, X_test_raw, y_train, y_test = perform_stratified_split(X, y)
+
+    print("[3/5] Building ColumnTransformer and fitting strictly on training data...")
+    preprocessor = build_preprocessor()
+    X_train_trans, X_test_trans, fitted_preprocessor, feature_names = fit_and_transform(
+        preprocessor, X_train_raw, X_test_raw
+    )
+
+    print("[4/5] Executing validation checks...")
+    metrics = validate_splits_and_transformations(
+        X_train_raw, X_test_raw, y_train, y_test,
+        X_train_trans, X_test_trans, fitted_preprocessor, feature_names
+    )
+
+    print("[5/5] Saving split datasets and preprocessor artifact...")
+    saved_paths = save_artifacts(
+        X_train_raw, X_test_raw, y_train, y_test,
+        X_train_trans, X_test_trans, fitted_preprocessor
+    )
+
+    return metrics, saved_paths
+
+
+if __name__ == "__main__":
+    try:
+        metrics, paths = run_preprocessing_pipeline()
+        print("\n" + "=" * 65)
+        print("PREPROCESSING & TRAIN-TEST SPLIT SUCCESSFUL")
+        print("=" * 65)
+        print(f"Training Samples:   {metrics['train_samples']} rows")
+        print(f"Testing Samples:    {metrics['test_samples']} rows")
+        print(f"Raw Features:       {metrics['raw_features_count']} columns")
+        print(f"Transformed Features:{metrics['transformed_features_count']} columns")
+        print(f"Train Class Dist:   0 (Good)={metrics['train_target_dist'][0]} (70.0%), 1 (Bad)={metrics['train_target_dist'][1]} (30.0%)")
+        print(f"Test Class Dist:    0 (Good)={metrics['test_target_dist'][0]} (70.0%), 1 (Bad)={metrics['test_target_dist'][1]} (30.0%)")
+        print(f"Index Overlap:      {metrics['index_overlap_count']} (Zero overlap verified)")
+        print(f"Unseen Categories:  {metrics['unseen_category_handling']}")
+        print("\nSaved Artifacts:")
+        for name, p in paths.items():
+            print(f"  - {name}: {p} ({p.stat().st_size:,} bytes)")
+    except Exception as exc:
+        print(f"\n[ERROR] Preprocessing failed: {exc}", file=sys.stderr)
+        sys.exit(1)

@@ -1,0 +1,102 @@
+===========================================================================
+EXPLORATORY DATA ANALYSIS (EDA) SUMMARY REPORT
+Project: Intelligent Credit Risk Assessment Using Explainable AI
+Dataset: Statlog (German Credit Data) - UCI Machine Learning Repository
+===========================================================================
+
+1. DATA QUALITY & INTEGRITY AUDIT
+---------------------------------------------------------------------------
+- Total Records: 1,000
+- Total Attributes: 21 (20 input features + 1 target)
+- Missing Values: 0 (0.00%)
+- Duplicate Records: 0 (0.00%)
+- Feature Composition: 7 numerical, 13 categorical
+Assessment: The processed dataset exhibits pristine data hygiene with zero missing
+or duplicate rows. Categorical attributes preserve alphanumeric symbolic codes
+(e.g., A11, A12) conforming with official UCI specifications.
+
+2. TARGET CLASS DISTRIBUTION (credit_risk)
+---------------------------------------------------------------------------
+- Good / Non-Risky (Class 0): 700 applicants (70.0%)
+- Bad / Risky / Default (Class 1): 300 applicants (30.0%)
+- Class Imbalance Ratio: 2.33:1 (Good to Bad)
+Observations:
+  * Moderate class imbalance is present (70% vs. 30%).
+  * Models relying strictly on raw accuracy could achieve 70% by predicting non-risky for all.
+  * Crucial modeling implication: Evaluation must emphasize ROC-AUC, PR-AUC, Recall/F1-score,
+    and cost-sensitive threshold adjustments rather than unweighted accuracy.
+
+3. NUMERICAL FEATURE DISTRIBUTIONS & RISK CORRELATION
+---------------------------------------------------------------------------
+Summary Statistics Table:
+                   count     mean      std    min     25%     50%      75%      max  skew  mean_good_0  mean_bad_1  mean_diff_pct
+duration          1000.0    20.90    12.06    4.0    12.0    18.0    24.00     72.0  1.09        19.21       24.86          29.43
+credit_amount     1000.0  3271.26  2822.74  250.0  1365.5  2319.5  3972.25  18424.0  1.95      2985.46     3938.13          31.91
+installment_rate  1000.0     2.97     1.12    1.0     2.0     3.0     4.00      4.0 -0.53         2.92        3.10           6.05
+residence_since   1000.0     2.84     1.10    1.0     2.0     3.0     4.00      4.0 -0.27         2.84        2.85           0.25
+age               1000.0    35.55    11.38   19.0    27.0    33.0    42.00     75.0  1.02        36.22       33.96          -6.24
+existing_credits  1000.0     1.41     0.58    1.0     1.0     1.0     2.00      4.0  1.27         1.42        1.37          -4.05
+num_dependents    1000.0     1.16     0.36    1.0     1.0     1.0     1.00      2.0  1.91         1.16        1.15          -0.21
+
+Key Numerical Observations:
+  * Loan Duration: Risky applicants average 24.9 months vs. 19.2 months for good applicants (+29.4% longer). Longer loans carry higher default hazard.
+  * Credit Amount: Defaulting borrowers borrow significantly larger amounts on average (3938 DM vs. 2985 DM, +31.9%).
+  * Age: Risky applicants skew younger (mean 34.0 years vs. 36.2 years for non-risky).
+  * Skewness: Credit amount (skew = 1.95) and loan duration (skew = 1.09) exhibit notable right skew,
+    suggesting standard scaling or tree-based robustness is advantageous.
+
+4. CRITICAL CATEGORICAL RISK DRIVERS
+---------------------------------------------------------------------------
+Attribute: checking_status
+checking_status  total_applicants  defaults  default_rate  default_rate_pct  share_of_pool_pct
+            A11               274       135      0.492701              49.3               27.4
+            A12               269       105      0.390335              39.0               26.9
+            A13                63        14      0.222222              22.2                6.3
+            A14               394        46      0.116751              11.7               39.4
+
+Attribute: credit_history
+credit_history  total_applicants  defaults  default_rate  default_rate_pct  share_of_pool_pct
+           A30                40        25      0.625000              62.5                4.0
+           A31                49        28      0.571429              57.1                4.9
+           A32               530       169      0.318868              31.9               53.0
+           A33                88        28      0.318182              31.8                8.8
+           A34               293        50      0.170648              17.1               29.3
+
+Attribute: savings_status
+savings_status  total_applicants  defaults  default_rate  default_rate_pct  share_of_pool_pct
+           A61               603       217      0.359867              36.0               60.3
+           A62               103        34      0.330097              33.0               10.3
+           A65               183        32      0.174863              17.5               18.3
+           A63                63        11      0.174603              17.5                6.3
+           A64                48         6      0.125000              12.5                4.8
+
+Attribute: housing
+housing  total_applicants  defaults  default_rate  default_rate_pct  share_of_pool_pct
+   A153               108        44      0.407407              40.7               10.8
+   A151               179        70      0.391061              39.1               17.9
+   A152               713       186      0.260870              26.1               71.3
+
+Key Categorical Observations:
+  * Checking Account Status: Borrowers with negative/no balance (A11: <0 DM) have an alarming
+    default rate of ~49.3%, whereas borrowers with >=200 DM (A13) or no checking account (A14)
+    default at only 22.2% and 11.7% respectively. This is a primary risk discriminator.
+  * Credit History: Borrowers with critical accounts / active credits elsewhere (A34) show surprisingly
+    lower default rates (17.1%) than borrowers with delayed payments or all loans paid duly,
+    reflecting established credit bureau activity and seasoned borrowing history.
+  * Savings Status: Higher liquid savings (A64: >=1000 DM) drastically correlates with repayment
+    (default rate 12.5% vs. ~36.0% for <100 DM savings).
+
+5. DATASET LIMITATIONS & EXPLAINABILITY (XAI) IMPLICATIONS
+---------------------------------------------------------------------------
+  * Modest Sample Size: 1,000 instances is ideal for fast prototyping and XAI visual verification,
+    but demands cross-validation to prevent tree-ensemble overfitting.
+  * Sensitive Features (Fair Lending): Attributes such as personal_status (encodes gender/marital)
+    and foreign_worker represent protected demographic features. Under regulations such as ECOA
+    and GDPR, XAI (SHAP/LIME) will play a crucial role in auditing whether these features disproportionately
+    bias loan approval decisions.
+  * Discretization: Certain continuous financial quantities were originally discretized into bins
+    (e.g., checking_status A11..A14, savings_status A61..A65), which simplifies local surrogate explanations.
+
+===========================================================================
+END OF EDA REPORT
+===========================================================================

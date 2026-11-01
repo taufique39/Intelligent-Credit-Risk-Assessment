@@ -1,0 +1,130 @@
+=====================================================================================
+EXPLAINABLE ARTIFICIAL INTELLIGENCE (XAI) AUDIT REPORT
+Project: Intelligent Credit Risk Assessment Using Explainable AI
+Frameworks: SHAP (Shapley Additive exPlanations) & LIME (Local Surrogate)
+=====================================================================================
+
+1. METHODOLOGICAL FOUNDATION & MATHEMATICAL SCOPE
+-------------------------------------------------------------------------------------
+- Primary Model for Explanation: XGBoost Pipeline (models/xgboost.joblib).
+  * Rationale: Selected as the primary non-linear ensemble candidate to demonstrate
+    how post-hoc XAI reveals complex feature relationships beyond linear scorecards.
+  * Note: This is an explanatory design selection, not empirical proof that XGBoost is
+    the universally superior model.
+- Baseline Model for Comparison: Logistic Regression Pipeline (models/logistic_regression.joblib).
+- Target Convention: Class 0 = Good / Non-Risky | Class 1 = Bad / Risky / Default.
+- Output Space Formulation:
+  * SHAP TreeExplainer outputs values in log-odds margin space for Class 1 (Risky).
+  * Exact Mathematical Identity: P(Risky=1) = sigma(base_value + sum(phi_i)),
+    where sigma(z) = 1 / (1 + exp(-z)).
+  * Identity Verification: Confirmed with max reconstruction error < 1e-4 across all test rows.
+  * Interpretation: A positive SHAP value strictly increases the predicted log-odds
+    (and thus probability) of loan default. A negative value decreases default risk.
+
+2. SHAP GLOBAL FEATURE IMPORTANCE (AGGREGATED PARENT ATTRIBUTES)
+-------------------------------------------------------------------------------------
+Aggregated Importance Metric: Mean across all 200 test samples of the sum of absolute
+SHAP values belonging to each parent attribute (sum(|phi_j|) per feature).
+Note: Signed values are NOT combined; magnitudes are aggregated to preserve total influence.
+
+     Parent_Feature Feature_Type  Encoded_Columns_Count  Aggregated_Mean_Abs_SHAP  Rank
+    checking_status  Categorical                      4                  0.807945     1
+           duration    Numerical                      1                  0.383689     2
+     credit_history  Categorical                      5                  0.345611     3
+            purpose  Categorical                     10                  0.339502     4
+      credit_amount    Numerical                      1                  0.305000     5
+     savings_status  Categorical                      5                  0.296201     6
+         employment  Categorical                      5                  0.235399     7
+other_payment_plans  Categorical                      3                  0.205320     8
+ property_magnitude  Categorical                      4                  0.197869     9
+    personal_status  Categorical                      4                  0.165699    10
+   installment_rate    Numerical                      1                  0.162459    11
+            housing  Categorical                      3                  0.147427    12
+                age    Numerical                      1                  0.116971    13
+          telephone  Categorical                      2                  0.100858    14
+      other_parties  Categorical                      3                  0.057240    15
+                job  Categorical                      4                  0.044584    16
+   existing_credits    Numerical                      1                  0.038757    17
+    residence_since    Numerical                      1                  0.038482    18
+     num_dependents    Numerical                      1                  0.027075    19
+     foreign_worker  Categorical                      2                  0.024456    20
+
+3. TOP 10 GRANULAR ENCODED FEATURE CONTRIBUTORS
+-------------------------------------------------------------------------------------
+         Encoded_Feature  Mean_Abs_SHAP_LogOdds
+     checking_status_A14               0.586149
+                duration               0.383689
+           credit_amount               0.305000
+      credit_history_A34               0.225741
+      savings_status_A61               0.187151
+     checking_status_A11               0.164828
+        installment_rate               0.162459
+             purpose_A41               0.138286
+                     age               0.116971
+other_payment_plans_A141               0.115244
+
+Key Global Findings:
+  * checking_status (Rank 1): Consistently the dominant predictor of default risk.
+    In particular, checking_status_A11 (<0 DM / overdrawn) strongly pushes predictions
+    toward default (positive SHAP), while checking_status_A14 (no account) or A13 (>=200 DM)
+    exerts a strong negative (protective) push.
+  * duration & credit_amount: The two leading continuous numerical risk drivers.
+    Longer repayment duration and higher loan amounts systematically push borrowers
+    into higher default probabilities.
+  * savings_status & credit_history: Substantial secondary contributors reflecting liquidity
+    buffers and historical repayment behavior.
+
+4. LIME LOCAL CASE STUDIES (HELD-OUT TEST SET EXAMPLES)
+-------------------------------------------------------------------------------------
+LIME builds a local linear surrogate model around a single instance using original 20 raw features.
+
+A. TRUE POSITIVE EXAMPLE: Applicant #522
+   - Actual Status: Risky (True Label = 1)
+   - Model Prediction: Risky (Predicted Label = 1)
+   - Predicted Default Probability: 91.76%
+   - Top Local Factors Driving Default Risk:
+     * checking_status=A11                : weight = +0.1510 (Increases Risk (+))
+     * duration > 24.00                   : weight = +0.1085 (Increases Risk (+))
+     * credit_amount > 3933.00            : weight = +0.0844 (Increases Risk (+))
+     * savings_status=A61                 : weight = +0.0813 (Increases Risk (+))
+     * other_payment_plans=A143           : weight = -0.0801 (Decreases Risk (-))
+     * credit_history=A30                 : weight = +0.0745 (Increases Risk (+))
+     * foreign_worker=A201                : weight = +0.0591 (Increases Risk (+))
+     * property_magnitude=A124            : weight = +0.0534 (Increases Risk (+))
+
+B. TRUE NEGATIVE EXAMPLE: Applicant #772
+   - Actual Status: Good / Non-Risky (True Label = 0)
+   - Model Prediction: Good / Non-Risky (Predicted Label = 0)
+   - Predicted Default Probability: 0.84%
+   - Top Local Protective Factors:
+     * checking_status=A14                : weight = -0.1938 (Decreases Risk (-))
+     * purpose=A41                        : weight = -0.1213 (Decreases Risk (-))
+     * other_payment_plans=A143           : weight = -0.0937 (Decreases Risk (-))
+     * savings_status=A61                 : weight = +0.0768 (Increases Risk (+))
+     * credit_history=A34                 : weight = -0.0760 (Decreases Risk (-))
+     * 2317.00 < credit_amount <= 3933.00 : weight = -0.0752 (Decreases Risk (-))
+     * 18.00 < duration <= 24.00          : weight = +0.0632 (Increases Risk (+))
+     * foreign_worker=A201                : weight = +0.0498 (Increases Risk (+))
+
+5. METHODOLOGICAL COMPARISON: SHAP VS. LIME
+-------------------------------------------------------------------------------------
+  * Theoretical Basis: SHAP relies on game-theoretic Shapley values with proven mathematical
+    axioms (Efficiency, Symmetry, Additivity). LIME fits a local ridge regressor on perturbed points.
+  * Consistency: SHAP guarantees that local feature contributions sum exactly to the difference
+    between instance output and expected base value. LIME is an approximation that can fluctuate
+    depending on perturbation sampling parameters.
+  * Interpretability: LIME operates directly on human-understandable threshold rules
+    (e.g., 'duration > 24.00'), making it intuitive for frontline loan officers.
+
+6. CRITICAL ETHICAL & REGULATORY GOVERNANCE NOTICE
+-------------------------------------------------------------------------------------
+  1. Non-Causality: SHAP and LIME values quantify statistical associations within the trained model.
+     They do NOT imply real-world causation (e.g., arbitrarily lowering loan duration will not
+     guarantee financial solvency for an unstable borrower).
+  2. Fairness & Compliance: Explaining a prediction does NOT prove algorithmic fairness or regulatory
+     compliance (e.g., US ECOA, EU GDPR). Rather, XAI serves as an auditing instrument to detect
+     unlawful disparate impact or bias on sensitive attributes (such as personal_status or foreign_worker).
+
+=====================================================================================
+END OF XAI AUDIT REPORT
+=====================================================================================
