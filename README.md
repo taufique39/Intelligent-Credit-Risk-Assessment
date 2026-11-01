@@ -3,6 +3,13 @@
 An end-to-end, auditable machine learning research framework for credit risk evaluation, combining high-performing gradient-boosted decision trees and linear baselines with post-hoc explainability frameworks (**SHAP** and **LIME**). Features an interactive academic research decision-support application built with **Streamlit**, designed for credit risk assessment, regulatory interpretability research, and model auditing demonstrations.
 
 ---
+## 🚀 Live Demo
+
+Try the deployed application here:
+
+[**Intelligent Credit Risk Assessment – Live App**](https://xai-credit-risk-assessment.streamlit.app/)
+
+---
 
 ## 📌 Project Overview & Key Features
 
